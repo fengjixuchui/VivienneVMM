@@ -28,7 +28,6 @@ Environment:
 #include "log.h"
 
 #include "..\common\arch_x64.h"
-#include "..\common\kdebug.h"
 
 #include "HyperPlatform\HyperPlatform\util.h"
 
@@ -48,8 +47,8 @@ Environment:
 //
 typedef struct _FACADE_MANAGER_STATISTICS
 {
-    volatile LONG64 WriteEvents;
-    volatile LONG64 ReadEvents;
+    volatile POINTER_ALIGNMENT LONG64 WriteEvents;
+    volatile POINTER_ALIGNMENT LONG64 ReadEvents;
 } FACADE_MANAGER_STATISTICS, *PFACADE_MANAGER_STATISTICS;
 
 //
@@ -145,12 +144,9 @@ exit:
 //
 // FcdTermination
 //
-_Use_decl_annotations_
-NTSTATUS
+VOID
 FcdTermination()
 {
-    NTSTATUS ntstatus = STATUS_SUCCESS;
-
     INF_PRINT("Terminating debug register facade.");
 
     // Release processor state resources.
@@ -161,8 +157,6 @@ FcdTermination()
     }
 
     FcdiLogStatistics();
-
-    return ntstatus;
 }
 
 

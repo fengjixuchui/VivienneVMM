@@ -1,5 +1,10 @@
 /*++
 
+Copyright (c) 2019 changeofpace. All rights reserved.
+
+Use of this source code is governed by the MIT license. See the 'LICENSE' file
+for more information.
+
 Module Name:
 
     capture_execution_context.cpp
@@ -26,6 +31,7 @@ Environment:
 
 #include "breakpoint_manager.h"
 #include "config.h"
+#include "debug.h"
 #include "ioctl_validation.h"
 #include "log.h"
 #include "register_util.h"
@@ -40,19 +46,21 @@ Environment:
 //=============================================================================
 // Constants and Macros
 //=============================================================================
-#define CEC_TAG 'TceC'
+#define MODULE_TITLE    "Capture Execution Context"
+
+#define CEC_TAG         'TceC'
 
 #define CEC_MAX_DURATION_MS     (SECONDS_TO_MILLISECONDS(10))
 
 #ifdef CFG_VERBOSE_CAPTUREEXECUTIONCONTEXT
-#define cec_verbose_print       INF_PRINT
+#define CEC_VERBOSE_PRINT   INF_PRINT
 #else
-#define cec_verbose_print(Format, ...) ((VOID)0)
+#define CEC_VERBOSE_PRINT(Format, ...)
 #endif
 
 
 //=============================================================================
-// Internal Types
+// Private Types
 //=============================================================================
 
 //
@@ -61,24 +69,18 @@ Environment:
 //  implicitly allocated from the nonpaged pool because they are part of
 //  METHOD_BUFFERED requests.
 //
-typedef struct _CEC_REGISTER_CALLBACK_CONTEXT
-{
+typedef struct _CEC_REGISTER_CALLBACK_CONTEXT {
     X64_REGISTER Register;
-
     KSPIN_LOCK Lock;
     _Write_guarded_by_(Lock) ULONG HitCount;
     _Guarded_by_(Lock) PCEC_REGISTER_VALUES ValuesCtx;
-
 } CEC_REGISTER_CALLBACK_CONTEXT, *PCEC_REGISTER_CALLBACK_CONTEXT;
 
-typedef struct _CEC_MEMORY_CALLBACK_CONTEXT
-{
+typedef struct _CEC_MEMORY_CALLBACK_CONTEXT {
     CEC_MEMORY_DESCRIPTION MemoryDescription;
-
     KSPIN_LOCK Lock;
     _Write_guarded_by_(Lock) CEC_MEMORY_STATISTICS Statistics;
     _Guarded_by_(Lock) PCEC_MEMORY_VALUES ValuesCtx;
-
 } CEC_MEMORY_CALLBACK_CONTEXT, *PCEC_MEMORY_CALLBACK_CONTEXT;
 
 //
@@ -87,17 +89,17 @@ typedef struct _CEC_MEMORY_CALLBACK_CONTEXT
 //  allows the user to sample the register context for an instruction (or data
 //  access) without hooking the target memory via code patching.
 //
-typedef struct _CEC_MANAGER_STATE
-{
+typedef struct _CEC_MANAGER_STATE {
+
     //
-    // We use one mutex for each debug address register to ensure that only one
-    //  CEC request is using a debug address register at any given time.
+    // We use one resource for each debug address register to ensure that only
+    //  one CEC request is using a debug address register at any given time.
     //
-    // NOTE These mutexes do not prevent users from installing a breakpoint,
+    // NOTE These resources do not prevent users from installing a breakpoint,
     //  via the breakpoint manager interface, in a debug address register which
     //  is being used to complete a CEC request.
     //
-    POINTER_ALIGNMENT KGUARDED_MUTEX DarMutexes[DAR_COUNT];
+    POINTER_ALIGNMENT ERESOURCE DarResources[DAR_COUNT];
 
 } CEC_MANAGER_STATE, *PCEC_MANAGER_STATE;
 
@@ -109,7 +111,7 @@ CEC_MANAGER_STATE g_CecManager = {};
 
 
 //=============================================================================
-// Internal Prototypes
+// Private Prototypes
 //=============================================================================
 _Check_return_
 static
@@ -119,9 +121,6 @@ CeciInitializeInterval(
     _Out_ PLARGE_INTEGER pInterval
 );
 
-//
-// Capture Register Values Prototypes
-//
 _Check_return_
 static
 NTSTATUS
@@ -150,9 +149,6 @@ CeciVmxRegisterBreakpointCallback(
     _Inout_ PVOID pCallbackCtx
 );
 
-//
-// Capture Memory Values Prototypes
-//
 _Check_return_
 static
 NTSTATUS
@@ -170,7 +166,6 @@ CeciInitializeMemoryValuesContext(
     _In_ MEMORY_DATA_TYPE MemoryDataType
 );
 
-
 _IRQL_requires_min_(HIGH_LEVEL)
 _Check_return_
 static
@@ -187,24 +182,64 @@ CeciVmxMemoryBreakpointCallback(
 //=============================================================================
 // Meta Interface
 //=============================================================================
-
-//
-// CecInitialization
-//
-VOID
-CecInitialization()
+_Use_decl_annotations_
+NTSTATUS
+CecDriverEntry()
 {
-    INF_PRINT("Initializing capture execution context.");
+    BOOLEAN fResourceInitialized[ARRAYSIZE(g_CecManager.DarResources)] = {};
+    ULONG i = 0;
+    NTSTATUS ntstatus = STATUS_SUCCESS;
 
-    for (ULONG i = 0; i < DAR_COUNT; ++i)
+    INF_PRINT("Loading %s.", MODULE_TITLE);
+
+    for (i = 0; i < ARRAYSIZE(g_CecManager.DarResources); i++)
     {
-        KeInitializeGuardedMutex(&g_CecManager.DarMutexes[i]);
+        ntstatus = ExInitializeResourceLite(&g_CecManager.DarResources[i]);
+        if (!NT_SUCCESS(ntstatus))
+        {
+            ERR_PRINT("ExInitializeResourceLite failed: 0x%X", ntstatus);
+            goto exit;
+        }
+        //
+        fResourceInitialized[i] = TRUE;
     }
+
+    INF_PRINT("%s loaded.", MODULE_TITLE);
+
+exit:
+    if (!NT_SUCCESS(ntstatus))
+    {
+        for (i = 0; i < ARRAYSIZE(fResourceInitialized); i++)
+        {
+            if (fResourceInitialized[i])
+            {
+                VERIFY(ExDeleteResourceLite(&g_CecManager.DarResources[i]));
+            }
+        }
+    }
+
+    return ntstatus;
+}
+
+
+VOID
+CecDriverUnload()
+{
+    ULONG i = 0;
+
+    INF_PRINT("Unloading %s.", MODULE_TITLE);
+
+    for (i = 0; i < ARRAYSIZE(g_CecManager.DarResources); i++)
+    {
+        VERIFY(ExDeleteResourceLite(&g_CecManager.DarResources[i]));
+    }
+
+    INF_PRINT("%s unloaded.", MODULE_TITLE);
 }
 
 
 //=============================================================================
-// Client Interface
+// Public Interface
 //=============================================================================
 
 //
@@ -235,10 +270,12 @@ CecCaptureRegisterValues(
     HARDWARE_BREAKPOINT Breakpoint = {};
     LARGE_INTEGER DelayInterval = {};
     PCEC_REGISTER_CALLBACK_CONTEXT pCallbackCtx = {};
-    BOOLEAN HasMutex = FALSE;
+    BOOLEAN HasResource = FALSE;
     NTSTATUS ntstatus = STATUS_SUCCESS;
 
+    //
     // Validate in parameters.
+    //
     ntstatus = BpmInitializeBreakpoint(
         ProcessId,
         Index,
@@ -255,7 +292,7 @@ CecCaptureRegisterValues(
     //
     // The debug register index should have been validated by the breakpoint
     //  constructor, but we perform internal validation because the index
-    //  determines which mutex we acquire.
+    //  determines which resource we acquire.
     //
     ntstatus = IvValidateDebugRegisterIndex(Index);
     if (!NT_SUCCESS(ntstatus))
@@ -309,8 +346,9 @@ CecCaptureRegisterValues(
 
     CeciInitializeRegisterValuesContext(pValuesCtx, cbValuesCtx);
 
-    cec_verbose_print(
-        "CEC: Register request: dr%u, pid=0x%IX, addr=0x%IX, bptype=%c, bpsize=%c, reg=%s, time=%u",
+    CEC_VERBOSE_PRINT(
+        "CEC: Register request: dr%u, pid=0x%IX, addr=0x%IX, bptype=%c,"
+        " bpsize=%c, reg=%s, time=%u",
         Breakpoint.Index,
         Breakpoint.ProcessId,
         Breakpoint.Address,
@@ -320,10 +358,11 @@ CecCaptureRegisterValues(
         DurationInMilliseconds);
 
     //
-    // Acquire the mutex for the target debug address register.
+    // Acquire the resource for the target debug address register.
     //
-    KeAcquireGuardedMutex(&g_CecManager.DarMutexes[Index]);
-    HasMutex = TRUE;
+    ExEnterCriticalRegionAndAcquireResourceExclusive(
+        &g_CecManager.DarResources[Index]);
+    HasResource = TRUE;
 
     //
     // Install the hardware breakpoint on all processors.
@@ -365,14 +404,15 @@ CecCaptureRegisterValues(
         goto exit;
     }
 
-    cec_verbose_print(
+    CEC_VERBOSE_PRINT(
         "CEC: Register request complete: processed %u exceptions.",
         pCallbackCtx->HitCount);
 
 exit:
-    if (HasMutex)
+    if (HasResource)
     {
-        KeReleaseGuardedMutex(&g_CecManager.DarMutexes[Index]);
+        ExReleaseResourceAndLeaveCriticalRegion(
+            &g_CecManager.DarResources[Index]);
     }
 
     if (pCallbackCtx)
@@ -412,10 +452,12 @@ CecCaptureMemoryValues(
     HARDWARE_BREAKPOINT Breakpoint = {};
     LARGE_INTEGER DelayInterval = {};
     PCEC_MEMORY_CALLBACK_CONTEXT pCallbackCtx = {};
-    BOOLEAN HasMutex = FALSE;
+    BOOLEAN HasResource = FALSE;
     NTSTATUS ntstatus = STATUS_SUCCESS;
 
+    //
     // Validate in parameters.
+    //
     ntstatus = BpmInitializeBreakpoint(
         ProcessId,
         Index,
@@ -432,7 +474,7 @@ CecCaptureMemoryValues(
     //
     // The debug register index should have been validated by the breakpoint
     //  constructor, but we perform internal validation because the index
-    //  determines which mutex we acquire.
+    //  determines which resource we acquire.
     //
     ntstatus = IvValidateDebugRegisterIndex(Index);
     if (!NT_SUCCESS(ntstatus))
@@ -496,24 +538,29 @@ CecCaptureMemoryValues(
 #if defined(CFG_VERBOSE_CAPTUREEXECUTIONCONTEXT)
     if (pCallbackCtx->MemoryDescription.IsIndirectAddress)
     {
-        cec_verbose_print(
-            "CEC: Memory request (ind): dr%u, pid=0x%IX, bpaddr=0x%IX, bptype=%c, bpsize=%c, mdt=%c, bsreg=%s, ixreg=%s, sf=%u, disp=%Id, time=%u",
+        CEC_VERBOSE_PRINT(
+            "CEC: Memory request (ind): dr%u, pid=0x%IX, bpaddr=0x%IX,"
+            " bptype=%c, bpsize=%c, mdt=%c, bsreg=%s, ixreg=%s, sf=%u,"
+            " disp=%Id, time=%u",
             Breakpoint.Index,
             Breakpoint.ProcessId,
             Breakpoint.Address,
             HwBpTypeToChar(Breakpoint.Type),
             HwBpSizeToChar(Breakpoint.Size),
             MemoryDataTypeToChar(pCallbackCtx->MemoryDescription.DataType),
-            GpRegToString(pCallbackCtx->MemoryDescription.u.IndirectAddress.BaseRegister),
-            GpRegToString(pCallbackCtx->MemoryDescription.u.IndirectAddress.IndexRegister),
+            GpRegToString(
+                pCallbackCtx->MemoryDescription.u.IndirectAddress.BaseRegister),
+            GpRegToString(
+                pCallbackCtx->MemoryDescription.u.IndirectAddress.IndexRegister),
             pCallbackCtx->MemoryDescription.u.IndirectAddress.ScaleFactor,
             pCallbackCtx->MemoryDescription.u.IndirectAddress.Displacement,
             DurationInMilliseconds);
     }
     else
     {
-        cec_verbose_print(
-            "CEC: Memory request (abs): dr%u, pid=0x%IX, bpaddr=0x%IX, bptype=%c, bpsize=%c, mdt=%c, va=0x%IX, time=%u",
+        CEC_VERBOSE_PRINT(
+            "CEC: Memory request (abs): dr%u, pid=0x%IX, bpaddr=0x%IX,"
+            " bptype=%c, bpsize=%c, mdt=%c, va=0x%IX, time=%u",
             Breakpoint.Index,
             Breakpoint.ProcessId,
             Breakpoint.Address,
@@ -526,10 +573,11 @@ CecCaptureMemoryValues(
 #endif
 
     //
-    // Acquire the mutex for the target debug address register.
+    // Acquire the resource for the target debug address register.
     //
-    KeAcquireGuardedMutex(&g_CecManager.DarMutexes[Index]);
-    HasMutex = TRUE;
+    ExEnterCriticalRegionAndAcquireResourceExclusive(
+        &g_CecManager.DarResources[Index]);
+    HasResource = TRUE;
 
     //
     // Install the hardware breakpoint on all processors.
@@ -582,8 +630,9 @@ CecCaptureMemoryValues(
     //
     // Log statistics.
     //
-    cec_verbose_print(
-        "CEC: Memory request complete: hits=%Iu, skips=%Iu, invpte=%Iu, utpage=%Iu, spanaddr=%Iu, sysaddr=%Iu, valerr=%Iu",
+    CEC_VERBOSE_PRINT(
+        "CEC: Memory request complete: hits=%Iu, skips=%Iu, invpte=%Iu,"
+        " utpage=%Iu, spanaddr=%Iu, sysaddr=%Iu, valerr=%Iu",
         pCallbackCtx->Statistics.HitCount,
         pCallbackCtx->Statistics.SkipCount,
         pCallbackCtx->Statistics.InvalidPteErrors,
@@ -593,9 +642,10 @@ CecCaptureMemoryValues(
         pCallbackCtx->Statistics.ValidationErrors);
 
 exit:
-    if (HasMutex)
+    if (HasResource)
     {
-        KeReleaseGuardedMutex(&g_CecManager.DarMutexes[Index]);
+        ExReleaseResourceAndLeaveCriticalRegion(
+            &g_CecManager.DarResources[Index]);
     }
 
     if (pCallbackCtx)
@@ -608,7 +658,7 @@ exit:
 
 
 //=============================================================================
-// Internal Interface
+// Private Interface
 //=============================================================================
 
 //
@@ -640,7 +690,9 @@ CeciInitializeInterval(
 
     pInterval->QuadPart = MILLISECONDS_TO_RELATIVE_NTINTERVAL(ClampedDuration);
 
+    //
     // Sanity check: The final time should be negative.
+    //
     if (pInterval->QuadPart >= 0)
     {
         ntstatus = STATUS_INVALID_PARAMETER_2;

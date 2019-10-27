@@ -46,11 +46,11 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)bin\$(Platform)\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Platform)\$(Configuration)\$(ProjectName)\</OutDir>
     <TargetName>VivienneTests</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)bin\$(Platform)\$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)bin\$(Platform)\$(Configuration)\$(ProjectName)\</OutDir>
     <TargetName>VivienneTests</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -58,7 +58,6 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <ConformanceMode>true</ConformanceMode>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -72,7 +71,6 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <ConformanceMode>true</ConformanceMode>
       <WholeProgramOptimization>false</WholeProgramOptimization>
     </ClCompile>
     <Link>
@@ -84,6 +82,7 @@
   <ItemGroup>
     <ClCompile Include="..\common\time_util.cpp" />
     <ClCompile Include="..\VivienneCL\driver_io.cpp" />
+    <ClCompile Include="..\VivienneCL\log.cpp" />
     <ClCompile Include="..\VivienneCL\string_util.cpp" />
     <ClCompile Include="..\VivienneCL\token_parser.cpp" />
     <ClCompile Include="main.cpp" />
@@ -112,6 +111,7 @@
     <ClInclude Include="..\common\driver_io_types.h" />
     <ClInclude Include="..\common\time_util.h" />
     <ClInclude Include="..\VivienneCL\driver_io.h" />
+    <ClInclude Include="..\VivienneCL\log.h" />
     <ClInclude Include="..\VivienneCL\ntdll.h" />
     <ClInclude Include="..\VivienneCL\string_util.h" />
     <ClInclude Include="..\VivienneCL\token_parser.h" />
